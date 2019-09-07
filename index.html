@@ -65,6 +65,8 @@
       }
     }
 
+    const random = (from, to) => Math.floor(from + Math.random()*(to-from+1))
+
     let mousePos = {
       vX: 0, vY: 0
     }
@@ -83,6 +85,9 @@
     }
     const tToV = ({ tX, tY }, state) => {
       return { vX: tX * tileSize + state.offsetLeft, vY: tY * tileSize + state.offsetTop }
+    }
+    const tDist = (from, to) => {
+      return Math.abs(from.tX - to.tX) + Math.abs(from.tY - to.tY)
     }
 
     let downEvent = undefined
@@ -198,6 +203,10 @@
     const renderUnit = (unit) => {
       const { sprite, x, y } = unit
       ctx.drawImage(sprite, x, y, tileSize, tileSize)
+      ctx.font = '10px'
+      ctx.textBaseline = 'top'
+      ctx.fillStyle = 'black'
+      ctx.fillText(`${unit.team}, ${unit.health}`, x, y)
     }
 
     const renderBuilding = (building) => {
@@ -224,6 +233,16 @@
             },
           },
           'idleWhileMoving': {
+            'left': {
+              sprites: [0, 1].map(i => document.querySelector('#cop-sit-left' + i)),
+              animationDuration: 500,
+            },
+            'right': {
+              sprites: [0, 1].map(i => document.querySelector('#cop-sit-right' + i)),
+              animationDuration: 500,
+            },
+          },
+          'attacking': {
             'left': {
               sprites: [0, 1].map(i => document.querySelector('#cop-sit-left' + i)),
               animationDuration: 500,
@@ -339,7 +358,7 @@
         render: renderBuilding,
       }
       items.push(mountain)
-      items.push(spice)
+      // items.push(spice)
       return items
     }
 
@@ -353,14 +372,27 @@
           timeStateEntered: Date.now(),
           idealPath: [],
           in: {tX: 2, tY: 6},
+          team: 0,
+          health: 100,
+          lastInstruction: {},
         },
         {
-          unitInfo: unitsInfo[1],
+          unitInfo: unitsInfo[0],
           state: 'idle',
           timeStateEntered: Date.now(),
           idealPath: [],
-          in: {tX: 15, tY: 8},
+          in: {tX: 10, tY: 8},
+          team: 1,
+          health: 100,
+          lastInstruction: {},
         },
+        // {
+        //   unitInfo: unitsInfo[1],
+        //   state: 'idle',
+        //   timeStateEntered: Date.now(),
+        //   idealPath: [],
+        //   in: {tX: 15, tY: 8},
+        // },
       ]
     }
 
@@ -374,10 +406,11 @@
     }
 
     const getInitialItems = () => {
-      return [{
-        itemInfo: itemsInfo[1],
-        pos: {tX: 10, tY: 10},
-      }]
+      return []
+      // return [{
+      //   itemInfo: itemsInfo[1],
+      //   pos: {tX: 10, tY: 10},
+      // }]
     }
 
     let state = {
@@ -425,7 +458,7 @@
       state.buildings.concat(state.items).forEach(x => {
         graph[x.pos.tX][x.pos.tY] = 0
       })
-      state.units.filter(u => u.state === 'idle' || u.state === 'idleWhileMoving').forEach(x => {
+      state.units.filter(u => u.state === 'idle' || u.state === 'idleWhileMoving' || u.state === 'attacking').forEach(x => {
         // Make other stationary units a mild obstacle
         graph[x.in.tX][x.in.tY] = 20
       })
@@ -473,17 +506,31 @@
               unitClicked = nearbyUnits[0]
             }
             if (state.selected.length === 0) {
-              if (unitClicked) {
+              if (unitClicked && unitClicked.team === 0) {
                 state.selected = [unitClicked]
               }
-            } else { // something is already selected
+            } else { // You clicked somewhere with a unit selected
+              // If you're toggling the unit
               if (state.selected.length === 1 && state.selected[0] === unitClicked) {
                 state.selected = []
               } else { // You clicked on a different tile while having something selected
                 // If you clicked on another unit
                 if (unitClicked !== undefined) {
-                  state.selected = [unitClicked]
-                } else {
+                  if (unitClicked.team === 0) {
+                    // You're changing selection to your other unit
+                    state.selected = [unitClicked]
+                  } else {
+                    // You're attacking a unit
+                    console.log('attack')
+                    for (let unit of state.selected) {
+                      state.actions.push({
+                        type: 'attackUnit',
+                        instructedUnit: unit,
+                        targetUnit: unitClicked
+                      })
+                    }
+                  }
+                } else { // you didn't click on a unit but you did have a unit selected, so it's a move action
                   for (let unit of state.selected) {
                     let { tX, tY } = vToT(state.clicked, state)
                     let target = { tX, tY }
@@ -491,7 +538,6 @@
                     if (state.selected.length > 1) {
                       const nineGridDeltas = [[0, 0], [1, 0], [1, 1], [0, 1], [-1, 1], [-1, 0], [-1, -1], [0, -1], [1, -1]]
                       let allowableTargets = nineGridDeltas.map(d => { return { tX: tX + d[0], tY: tY + d[1] } }).filter(tile => !isTileBlockedByEnvironment(state, tile))
-                      const random = (from, to) => Math.floor(from + Math.random()*(to-from+1))
                       target = allowableTargets[random(0, allowableTargets.length-1)]
                     }
                     state.actions.push({
@@ -540,12 +586,27 @@
                 type: 'buildUnit',
                 building: buildingsThatCanBuildUnit[0],
                 unitInfo: state.clickedToBuildUnit,
+                health: 100
               })
-              state.money -= state.clickedToBuildUnit.cost
             }
           }
         }
         state.clickedToBuildUnit = undefined
+      }
+
+      const doAIActions = (state) => {
+        for (let unit of state.units) {
+          if (unit.team !== 0 & Math.random() < 0.3) {
+            state.actions.push({
+              type: 'moveUnit',
+              unit,
+              moveTo: {
+                tX: Math.min(Math.max(unit.in.tX + random(-3, 3), 0), viewportTileWidth - 1),
+                tY: Math.min(Math.max(unit.in.tY + random(-3, 3), 0), viewportTileHeight - 1)
+              }
+            })
+          }
+        }
       }
 
       const convertActionsToState = (state) => {
@@ -557,11 +618,18 @@
               // If the unit was moving, cancel it's planned movements after it completes the tile in progress
               if (unit.state === 'moving') {
                 unit.idealPath = [unit.from].concat(getPathFromTo(unit.in, action.moveTo, state))
-              } else if (unit.state === 'idle' || unit.state === 'idleWhileMoving') {
+              } else {
+                // Not sure if I should set state here...
+                unit.state = 'idle'
                 unit.idealPath = getPathFromTo(unit.in, action.moveTo, state)
-                unit.timeStateEntered = now
+                // Need to think more about whether this should be enabled
+                // unit.timeStateEntered = now
               }
               unit.lastInstruction = action
+            } else if (action.type === 'attackUnit') {
+              action.instructedUnit.idealPath = getPathFromTo(action.instructedUnit.in, action.targetUnit.in, state)
+              // action.instructedUnit.timeStateEntered = now
+              action.instructedUnit.lastInstruction = action
             } else if (action.type === 'buildBuilding') {
               state.buildings.push({
                 buildingInfo: action.buildingInfo,
@@ -572,7 +640,11 @@
                 unitInfo: action.unitInfo,
                 idealPath: [],
                 in: {tX: action.building.pos.tX+1, tY: action.building.pos.tY},
+                team: 0,
+                lastInstruction: {},
+                health: 100
               })
+              state.money -= action.unitInfo.cost
             }
           }
         }
@@ -605,24 +677,31 @@
 
       const recalculatePaths = (state) => {
         for (let unit of state.units) {
-          if (unit.idealPath.length >= 2 && (unit.state === 'idleWhileMoving' || unit.state === 'moving')) {
+          const hasGoalLocationAndNotThere = unit.idealPath.length >= 2 && (unit.state === 'idleWhileMoving' || unit.state === 'moving')
+          const hasAttackTarget = unit.lastInstruction.type === 'attackUnit' && unit.lastInstruction.completed !== true
+          if (hasGoalLocationAndNotThere || hasAttackTarget) {
             // TODO: I think there's a bug in here - when I had this set to append the current path 0 to the path from 1 the units stopped jumping
             if (unit.from === undefined) {
               console.log('undefined from', unit)
             }
             let potentialNewPath
-            if (unit.state === 'idleWhileMoving') {
-              potentialNewPath = getPathFromTo(unit.in, unit.idealPath[unit.idealPath.length-1], state)
+            let unitGoalPos = hasAttackTarget ? unit.lastInstruction.targetUnit.in : unit.idealPath[unit.idealPath.length-1]
+            if (unit.state === 'idleWhileMoving' || unit.state === 'attacking' || unit.state === 'idle') {
+              potentialNewPath = getPathFromTo(unit.in, unitGoalPos, state)
             }  else if (unit.state === 'moving') {
-              potentialNewPath = [unit.from].concat(getPathFromTo(unit.in, unit.idealPath[unit.idealPath.length-1], state))
+              potentialNewPath = [unit.from].concat(getPathFromTo(unit.in, unitGoalPos, state))
             }
             // If no path is currently visible due to other units, don't remove the old path
             if (potentialNewPath.length >= 2) {
               let pathIsSame = true
-              for (let i = 0; i < unit.idealPath.length; i++) {
-                if (!isPosSame(unit.idealPath[i], potentialNewPath[i])) {
-                  pathIsSame = false
-                  break
+              if (unit.idealPath.length !== potentialNewPath.length) {
+                pathIsSame = false
+              } else {
+                for (let i = 0; i < unit.idealPath.length; i++) {
+                  if (!isPosSame(unit.idealPath[i], potentialNewPath[i])) {
+                    pathIsSame = false
+                    break
+                  }
                 }
               }
               if (!pathIsSame) {
@@ -634,9 +713,34 @@
         }
       }
 
+      const doUnitAttacking = (state) => {
+        for (let unit of state.units) {
+          const unitWantsToAttack = unit.lastInstruction.type === 'attackUnit' && unit.lastInstruction.completed !== true
+          if (!unitWantsToAttack) {
+            continue;
+          }
+          const targetWithinRange = tDist(unit.in, unit.lastInstruction.targetUnit.in) < 3
+          if (!targetWithinRange) {
+            continue;
+          }
+          unit.proposedNext = {
+            state: 'attacking',
+            in: unit.in,
+            committed: true
+          }
+          // Probably this should be done where we actually resolve all the proposals
+          unit.lastInstruction.targetUnit.health--
+        }
+      }
+
       const doUnitMovement = (state) => {
         const setProposedForUnits = (state) => {
           for (let unit of state.units) {
+            // If earlier logic has already committed this unit, skip it
+            if (unit.proposedNext !== undefined && unit.proposedNext.committed) {
+              continue
+            }
+
             const movementPerc = (now - unit.timeStateEntered) / unit.unitInfo.singleTileMoveDuration
             if (unit.state === 'moving' && movementPerc < 1) {
               unit.proposedNext = {
@@ -661,16 +765,21 @@
                   state: 'idle',
                   in: unit.in,
                 }
-                unit.lastInstruction.completed = true
+                if (unit.lastInstruction.type === 'moveUnit') {
+                    unit.lastInstruction.completed = true
+                }
               }
-            } else if (unit.state === 'idle' && unit.idealPath.length > 0 || unit.state === 'idleWhileMoving') {
+            } else if (unit.state === 'idle' && unit.idealPath.length > 0 || unit.state === 'attacking' && unit.idealPath.length > 0 || unit.state === 'idleWhileMoving') {
               // User clicked to have you move to the same space you're already in!
               if (unit.idealPath[1] === undefined) {
                 unit.proposedNext = {
                   state: 'idle',
                   in: unit.in,
                 }
-                unit.lastInstruction.completed = true
+                if (unit.lastInstruction.type === 'moveUnit') {
+                    unit.lastInstruction.completed = true
+                }
+                // Maybe mark attack as completed if enemy is dead?
               } else {
                 unit.proposedNext = {
                   state: 'moving',
@@ -713,7 +822,6 @@
                 //   console.log(state.units.filter(u => u.proposedNext.in === undefined)[0])
                 //   throw 'A unit has no proposedNext in'
                 // }
-
                 const unitsInProposedNext = (unit) => state.units.filter(unitB => unitB !== unit && isPosSame(unit.proposedNext.in, unitB.in))
                 const proposedNextHasUncomittedUnitCurrently = (unit) => unitsInProposedNext(unit).filter(u => u.proposedNext.committed !== true).length > 0
                 const unitInProposedNextWasMovedByDifferentUserAction = true
@@ -745,7 +853,7 @@
                   } else {
                     // We need to ask unitB to move
                     // TODO: prevent unit from pushing another unit that's now idle after being moved as part of the same action
-                    console.log('A needs B to move', JSON.parse(JSON.stringify(unit)), JSON.parse(JSON.stringify(unitB)))
+                    // console.log('A needs B to move', JSON.parse(JSON.stringify(unit)), JSON.parse(JSON.stringify(unitB)))
                     // TODO: Handle case where unitB cannot commit to any option
                     const nineGridDeltas = [[1, 0], [1, 1], [0, 1], [-1, 1], [-1, 0], [-1, -1], [0, -1], [1, -1]]
                     let allowableTargets = nineGridDeltas.map(d => { return { tX: unitB.in.tX + d[0], tY: unitB.in.tY + d[1] } }).filter(tile => !isTileBlockedByEnvironment(state, tile))
@@ -808,7 +916,7 @@
             unit.x = state.offsetLeft + Math.round((1-movementPerc) * unit.from.tX * tileSize + movementPerc * unit.in.tX * tileSize)
             unit.y = state.offsetTop + Math.round((1-movementPerc) * unit.from.tY * tileSize + movementPerc * unit.in.tY * tileSize)
             unit.direction = unit.in.tX >= unit.from.tX ? 'right' : 'left'
-          } else if (unit.state === 'idle' || unit.state === 'idleWhileMoving') {
+          } else if (unit.state === 'idle' || unit.state === 'idleWhileMoving' || unit.state === 'attacking') {
             unit.x = state.offsetLeft + unit.in.tX * tileSize
             unit.y = state.offsetTop + unit.in.tY * tileSize
           }
@@ -835,8 +943,10 @@
       // If we have a game tick, as opposed to an animation tick
       if (now - state.lastTick >= tickInterval) {
         state.lastTick = now
+        doAIActions(state)
         convertActionsToState(state)
         setDefaultPropertiesOnObjects(state)
+        doUnitAttacking(state)
         recalculatePaths(state)
         doUnitMovement(state)
       }
