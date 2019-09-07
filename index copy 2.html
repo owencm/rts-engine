@@ -1,0 +1,507 @@
+<!DOCTYPE>
+<body>
+  <style>
+    body {
+      padding: 0;
+      margin: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      height: 100%;
+    }
+    html {
+      background-color: darkgreen;
+    }
+  </style>
+  <canvas></canvas>
+  <div id='build-panel'></div>
+  <div style='display: none'>
+    <img id='cop-move-left0' src='./sprites/cop-move-left0.png'></img>
+    <img id='cop-move-left1' src='./sprites/cop-move-left1.png'></img>
+    <img id='cop-move-left2' src='./sprites/cop-move-left2.png'></img>
+    <img id='cop-move-left3' src='./sprites/cop-move-left3.png'></img>
+    <img id='cop-move-right0' src='./sprites/cop-move-right0.png'></img>
+    <img id='cop-move-right1' src='./sprites/cop-move-right1.png'></img>
+    <img id='cop-move-right2' src='./sprites/cop-move-right2.png'></img>
+    <img id='cop-move-right3' src='./sprites/cop-move-right3.png'></img>
+    <img id='cop-sit-left0' src='./sprites/cop-sit-left0.png'></img>
+    <img id='cop-sit-left1' src='./sprites/cop-sit-left1.png'></img>
+    <img id='cop-sit-right0' src='./sprites/cop-sit-right0.png'></img>
+    <img id='cop-sit-right1' src='./sprites/cop-sit-right1.png'></img>
+    <img id='hq' src='./sprites/hq.png'></img>
+  </div>
+  <script type='module'>
+    'use strict'
+    import { astar, Graph } from './astar.js'
+    const canvas = document.querySelector('canvas')
+    canvas.width = 800
+    canvas.height = 400
+    const ctx = canvas.getContext('2d')
+    window.ctx = ctx
+
+    // character state is either:
+    //   stationary
+    //   moving
+    //   if moving, we know delta between current game tick and when begun moving, so we know which animation cycle were in and what the positioning is
+
+
+    const tileSize = 48
+    const worldWidth = 20
+    const worldHeight = 13
+    const singleTileMoveDuration = 400
+
+    let mousePos = {
+      vX: 0, vY: 0, tX: 0, tY: 0,
+    }
+
+    canvas.addEventListener('mousemove', (e) => {
+      const vX = e.clientX - canvas.offsetLeft
+      const vY = e.clientY - canvas.offsetTop
+      mousePos = {
+        tX: vToT(vX),
+        tY: vToT(vY),
+        vX,
+        vY,
+      }
+    })
+
+    const vToT = (v) => Math.floor(v / tileSize)
+    const tToV = (t) => t * tileSize
+
+    let downEvent = undefined
+    let dragging = false
+
+    canvas.addEventListener('mousedown', e => {
+      downEvent = e
+    }, true)
+
+    canvas.addEventListener('mouseup', e => {
+      if (!dragging) {
+        const vX = e.clientX - canvas.offsetLeft
+        const vY = e.clientY - canvas.offsetTop
+        state.clicked = {
+          tX: vToT(vX),
+          tY: vToT(vY),
+          vX,
+          vY,
+        }
+      }
+      downEvent = undefined
+      dragging = false
+      state.mouseDragging = undefined
+    }, true)
+
+    canvas.addEventListener('mousemove', e => {
+      if (downEvent) {
+        if (!dragging) {
+          const draggedHorisontally = Math.abs(e.clientX - downEvent.clientX) > 10
+          const draggedVertically = Math.abs(e.clientY - downEvent.clientY) > 10
+          if (draggedHorisontally || draggedVertically) {
+            dragging = true
+          }
+        }
+        if (dragging) {
+          let fromVX = downEvent.clientX - canvas.offsetLeft
+          let fromVY = downEvent.clientY - canvas.offsetTop
+          let toVX = e.clientX - canvas.offsetLeft
+          let toVY = e.clientY - canvas.offsetTop
+          if (fromVX > toVX) {
+            let tmp = fromVX
+            fromVX = toVX
+            toVX = tmp
+          }
+          if (fromVY > toVY) {
+            let tmp = fromVY
+            fromVY = toVY
+            toVY = tmp
+          }
+          state.mouseDragging = {
+            fromVX,
+            fromVY,
+            toVX,
+            toVY
+          }
+        }
+      }
+    }, true)
+
+
+    const render = (state) => {
+      canvas.width = tileSize * worldWidth
+      canvas.height = tileSize * worldHeight
+      ctx.clearRect(0, 0, canvas.width, canvas.height)
+      for (let tX = 0; tX < worldWidth; tX++) {
+        for (let tY = 0; tY < worldHeight; tY++) {
+          ctx.beginPath()
+          ctx.rect(tX * tileSize, tY * tileSize, tileSize, tileSize)
+          ctx.fillStyle = tY % 2 === 1 ? (tX % 2 === 1 ? '#00e208' : '#03ce13') : (tX % 2 === 0 ? '#00e208' : '#03ce13')
+          ctx.fill()
+        }
+      }
+      if (state.selected.length > 0) {
+        for (let unit of state.selected) {
+          ctx.beginPath()
+          ctx.rect(unit.x, unit.y, tileSize, tileSize)
+          ctx.fillStyle = 'rgba(255, 255, 255, 0.3)'
+          ctx.fill()
+        }
+      }
+      for (let unit of state.units) {
+        unit.unitInfo.render(unit)
+      }
+      for (let building of state.buildings) {
+        building.buildingInfo.render(building)
+      }
+      for (let item of state.items) {
+        item.itemInfo.render(item)
+      }
+      if (state.placing !== undefined) {
+        ctx.beginPath()
+        ctx.rect(mousePos.vX - tileSize/8, mousePos.vY - tileSize/8, tileSize/4, tileSize/4)
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.7)'
+        ctx.fill()
+        ctx.beginPath()
+        ctx.rect(mousePos.tX * tileSize, mousePos.tY * tileSize, tileSize, tileSize)
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.4)'
+        ctx.fill()
+      }
+      if (state.mouseDragging) {
+        ctx.beginPath()
+        ctx.strokeStyle = 'white'
+        ctx.lineWidth = 2
+        let { fromVX, fromVY, toVX, toVY } = state.mouseDragging
+        ctx.strokeRect(fromVX, fromVY, toVX - fromVX, toVY - fromVY)
+        ctx.lineWidth = 1
+      }
+    }
+
+
+    const renderUnit = (unit) => {
+      const { sprite, x, y } = unit
+      ctx.drawImage(sprite, x, y, tileSize, tileSize)
+    }
+
+    const renderBuilding = (building) => {
+      let {x, y, sprite} = building
+      ctx.drawImage(sprite, x, y, tileSize, tileSize)
+    }
+
+
+    const getUnitsInfo = () => {
+      let unitsInfo = []
+      unitsInfo.push({
+        type: 'cop',
+        hasDirectionalSprites: true,
+        render: renderUnit,
+        spriteSets: {
+          'stationary': {
+            'left': {
+              sprites: [0, 1].map(i => document.querySelector('#cop-sit-left' + i)),
+              animationDuration: 500,
+            },
+            'right': {
+              sprites: [0, 1].map(i => document.querySelector('#cop-sit-right' + i)),
+              animationDuration: 500,
+            },
+          },
+          'moving': {
+            'left': {
+              sprites: [1, 2, 3].map(i => document.querySelector('#cop-move-left' + i)),
+              animationDuration: 200,
+            },
+            'right': {
+              sprites: [1, 2, 3].map(i => document.querySelector('#cop-move-right' + i)),
+              animationDuration: 200,
+            },
+          }
+        },
+      })
+      return unitsInfo
+    }
+
+    const unitsInfo = getUnitsInfo()
+
+    const getBuildingsInfo = () => {
+      let buildings = []
+      const hq = {
+        type: 'hq',
+        requires: [],
+        spriteSets: {
+          sprites: [document.querySelector('#hq')],
+          animationDuration: 1000
+        },
+        render: renderBuilding,
+      }
+      const barracks = {
+        type: 'barracks',
+        requires: [hq],
+        spriteSets: {
+          sprites: [document.querySelector('#hq')],
+          animationDuration: 1000
+        },
+        render: renderBuilding,
+        canBuild: [unitsInfo[0]],
+      }
+      const lightFactory = {
+        type: 'light-factory',
+        requires: [barracks],
+      }
+      return [hq, barracks, lightFactory]
+    }
+
+    const buildingsInfo = getBuildingsInfo()
+
+    const getItemsInfo = () => {
+      let items = []
+      const mountain = {
+        type: 'mountain',
+        spriteSets: {
+          sprites: [document.querySelector('#hq')],
+          animationDuration: 1000
+        },
+        render: renderBuilding,
+      }
+      items.push(mountain)
+      return items
+    }
+
+    const itemsInfo = getItemsInfo()
+
+    const getInitialUnits = () => {
+      return [
+        {
+          unitInfo: unitsInfo[0],
+          state: 'moving',
+          timeStateEntered: Date.now(),
+          path: [[1, 1], [2, 2], [2, 3]],
+        },
+        {
+          unitInfo: unitsInfo[0],
+          state: 'stationary',
+          timeStateEntered: Date.now(),
+          path: [[6, 6]],
+        }
+      ]
+    }
+
+    const getInitialBuildings = () => {
+      return [
+        {
+          buildingInfo: buildingsInfo[0],
+          pos: [1, 2],
+        }
+      ]
+    }
+
+    const getInitialItems = () => {
+      return [
+        {
+          itemInfo: itemsInfo[0],
+          pos: [5, 5]
+        }
+      ]
+    }
+
+    let state = {
+      time: Date.now(),
+      units: getInitialUnits(),
+      actions: [],
+      buildings: getInitialBuildings(),
+      items: getInitialItems(),
+      selected: []
+    }
+    window.state = state
+
+
+    const buildPanelDiv = document.querySelector('#build-panel')
+    buildPanelDiv.innerHTML = ''
+    for (let buildingInfo of buildingsInfo) {
+      let p = document.createElement('p')
+      p.innerText = buildingInfo.type
+      p.addEventListener('click', () => {
+        state.clickedToBuildBuilding = buildingInfo
+      }, true)
+      buildPanelDiv.appendChild(p)
+    }
+    for (let unitInfo of unitsInfo) {
+      let p = document.createElement('p')
+      p.innerText = unitInfo.type
+      p.addEventListener('click', () => {
+        state.clickedToBuildUnit = unitInfo
+      }, true)
+      buildPanelDiv.appendChild(p)
+    }
+
+    const pathFrom = (from, to, state) => {
+      let graph = (new Array(worldWidth)).fill(0).map(row => (new Array(worldHeight)).fill(1))
+      state.buildings.concat(state.items).forEach(x => {
+        graph[x.pos[0]][x.pos[1]] = 0
+      })
+      graph = new Graph(graph, { diagonal: true })
+    	let start = graph.grid[from[0]][from[1]]
+    	let end = graph.grid[to[0]][to[1]]
+    	let result = [from].concat(astar.search(graph, start, end, { heuristic: astar.heuristics.diagonal }).map(node => [node.x, node.y]))
+      return result
+    }
+
+    const destructivelyUpdateState = (state) => {
+      let now = Date.now()
+      let timeDelta = now - state.time
+
+      // Convert viewport clicks into game state and actions
+      if (state.clicked !== undefined) {
+        if (state.placing !== undefined) {
+          state.actions.push({
+            type: 'buildBuilding',
+            buildingInfo: state.placing,
+            pos: [state.clicked.tX, state.clicked.tY],
+          })
+          state.placing = undefined
+        } else {
+          const nearbyUnits = state.units.filter(unit => Math.abs(unit.x + tileSize / 2 - state.clicked.vX) < tileSize / 2 && Math.abs(unit.y + tileSize / 2 - state.clicked.vY) < tileSize / 2)
+          let unitClicked
+          if (nearbyUnits.length > 0) {
+            unitClicked = nearbyUnits[0]
+          }
+          if (state.selected.length === 0) {
+            state.selected = [unitClicked]
+          } else { // something is already selected
+            if (state.selected.length === 1 && state.selected[0] === unitClicked) {
+              state.selected = []
+            } else { // You clicked on a different tile while having something selected
+              // If you clicked on another unit
+              if (unitClicked !== undefined) {
+                state.selected = [unitClicked]
+              } else {
+                for (let unit of state.selected) {
+                  state.actions.push({
+                    type: 'moveUnit',
+                    unit,
+                    moveTo: [state.clicked.tX, state.clicked.tY],
+                  })
+                }
+              }
+            }
+          }
+        }
+      }
+      state.clicked = undefined
+
+      if (state.mouseDragging) {
+        const { fromVX, fromVY, toVX, toVY } = state.mouseDragging
+        state.selected = state.units.filter(unit => unit.x + tileSize / 2 > fromVX && unit.x + tileSize / 2 < toVX && unit.y + tileSize / 2 > fromVY && unit.y + tileSize / 2 < toVY)
+      }
+
+      // Convert other clicks into game state and actions
+      if (state.clickedToBuildBuilding !== undefined) {
+        state.placing = state.clickedToBuildBuilding
+      }
+      state.clickedToBuildBuilding = undefined
+      if (state.clickedToBuildUnit !== undefined) {
+        const buildingsThatCanBuildUnit = state.buildings.filter(building => building.buildingInfo.canBuild && building.buildingInfo.canBuild.indexOf(state.clickedToBuildUnit) > -1)
+        console.log(buildingsThatCanBuildUnit)
+        if (buildingsThatCanBuildUnit.length > 0) {
+          state.actions.push({
+            type: 'buildUnit',
+            building: buildingsThatCanBuildUnit[0],
+            unitInfo: state.clickedToBuildUnit,
+          })
+        }
+      }
+      state.clickedToBuildUnit = undefined
+
+      if (state.actions.length > 0) {
+        console.log(state.actions)
+        for (let action of state.actions) {
+          if (action.type === 'moveUnit') {
+            let unit = action.unit
+            let fromTile
+            // If the unit was moving, cancel it's planned movements after it completes the tile in progress
+            if (unit.state === 'moving') {
+              unit.path = unit.path.slice(0, 1).concat(pathFrom(unit.path[1], action.moveTo, state))
+            } else if (unit.state === 'stationary') {
+              unit.path = pathFrom(unit.path[0], action.moveTo, state)
+              unit.timeStateEntered = now
+            }
+            unit.state = 'moving'
+          } else if (action.type === 'buildBuilding') {
+            state.buildings.push({
+              buildingInfo: action.buildingInfo,
+              pos: action.pos,
+            })
+          } else if (action.type === 'buildUnit') {
+            state.units.push({
+              unitInfo: action.unitInfo,
+              path: [[action.building.pos[0]+1, action.building.pos[1]]]
+            })
+          }
+        }
+      }
+      state.actions = []
+
+      // Tidy up units to make sure they have all the required fields
+      for (let unit of state.units) {
+        unit.timeStateEntered = unit.timeStateEntered || Date.now()
+        unit.state = unit.state || 'stationary'
+        unit.direction = unit.direction || 'right'
+      }
+      // Ensure all buildings have appropriate sprites
+      for (let building of state.buildings) {
+        building.x = tToV(building.pos[0])
+        building.y = tToV(building.pos[1])
+        building.sprite = building.buildingInfo.spriteSets.sprites[0]
+      }
+      // Ensure all items have appropriate sprites
+      for (let item of state.items) {
+        item.x = tToV(item.pos[0])
+        item.y = tToV(item.pos[1])
+        item.sprite = item.itemInfo.spriteSets.sprites[0]
+      }
+
+      // TODO: disentangle logic of moving with updating state for rendering
+      // Update troops screen positions and sprites
+      for (let unit of state.units) {
+        if (unit.timeStateEntered === undefined) {
+          console.log(unit)
+          throw 'no timeStateEntered!'
+        }
+        if (unit.state === 'moving') {
+          if (now - unit.timeStateEntered < singleTileMoveDuration) {
+            const movementPerc = (now - unit.timeStateEntered) / singleTileMoveDuration
+            unit.x = Math.round((1-movementPerc) * unit.path[0][0] * tileSize + movementPerc * unit.path[1][0] * tileSize)
+            unit.y = Math.round((1-movementPerc) * unit.path[0][1] * tileSize + movementPerc * unit.path[1][1] * tileSize)
+            unit.direction = unit.path[1][0] >= unit.path[0][0] ? 'right' : 'left'
+          } else { // if we finished moving one tile
+            unit.x = unit.path[1][0] * tileSize
+            unit.y = unit.path[1][1] * tileSize
+            unit.path = unit.path.slice(1)
+            if (unit.path.length === 1) {
+              unit.state = 'stationary'
+            }
+            unit.timeStateEntered = now
+          }
+        }
+        if (unit.state === 'stationary') {
+          unit.x = unit.path[0][0] * tileSize
+          unit.y = unit.path[0][1] * tileSize
+          unit.direction = unit.direction || 'right'
+        }
+        let {sprites, animationDuration} = unit.unitInfo.spriteSets[unit.state][unit.direction]
+        let spriteIndex = Math.floor(((now - unit.timeStateEntered + animationDuration) % animationDuration) / animationDuration * sprites.length)
+        unit.sprite = sprites[spriteIndex]
+      }
+
+      state.time = now
+    }
+
+    const updateStateAndRender = () => {
+      destructivelyUpdateState(state)
+      render(state)
+      requestAnimationFrame(updateStateAndRender)
+    }
+
+    requestAnimationFrame(updateStateAndRender)
+    // setInterval(updateStateAndRender, tileSize)
+    updateStateAndRender()
+  </script>
+</body>

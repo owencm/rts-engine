@@ -1,0 +1,290 @@
+<!DOCTYPE>
+<body>
+  <style>
+    body {
+      padding: 0;
+      margin: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      height: 100%;
+    }
+    html {
+      background-color: darkgreen;
+    }
+  </style>
+  <canvas></canvas>
+  <div style='display: none'>
+    <img id='cop-move-left0' src='./sprites/cop-move-left0.png'></img>
+    <img id='cop-move-left1' src='./sprites/cop-move-left1.png'></img>
+    <img id='cop-move-left2' src='./sprites/cop-move-left2.png'></img>
+    <img id='cop-move-left3' src='./sprites/cop-move-left3.png'></img>
+    <img id='cop-move-right0' src='./sprites/cop-move-right0.png'></img>
+    <img id='cop-move-right1' src='./sprites/cop-move-right1.png'></img>
+    <img id='cop-move-right2' src='./sprites/cop-move-right2.png'></img>
+    <img id='cop-move-right3' src='./sprites/cop-move-right3.png'></img>
+    <img id='cop-sit-left0' src='./sprites/cop-sit-left0.png'></img>
+    <img id='cop-sit-left1' src='./sprites/cop-sit-left1.png'></img>
+    <img id='cop-sit-right0' src='./sprites/cop-sit-right0.png'></img>
+    <img id='cop-sit-right1' src='./sprites/cop-sit-right1.png'></img>
+  </div>
+  <script type='module'>
+    'use strict'
+    const canvas = document.querySelector('canvas')
+    canvas.width = 800
+    canvas.height = 400
+    const ctx = canvas.getContext('2d')
+    window.ctx = ctx
+
+    // character state is either:
+    //   stationary
+    //   moving
+    //   if moving, we know delta between current game tick and when begun moving, so we know which animation cycle were in and what the positioning is
+
+
+    const tileSize = 64
+    const worldWidth = 20
+    const worldHeight = 10
+    const singleTileMoveDuration = 400
+    const spritesAndMeta = {
+      leftSpritesAndMeta: {
+        sprites: [1, 2, 3].map(i => document.querySelector('#cop-move-left' + i)),
+        animationDuration: 200,
+      },
+      rightSpritesAndMeta: {
+        sprites: [1, 2, 3].map(i => document.querySelector('#cop-move-right' + i)),
+        animationDuration: 200,
+      },
+      leftSittingSpritesAndMeta: {
+        sprites: [0, 1].map(i => document.querySelector('#cop-sit-left' + i)),
+        animationDuration: 500,
+      },
+      rightSittingSpritesAndMeta: {
+        sprites: [0, 1].map(i => document.querySelector('#cop-sit-right' + i)),
+        animationDuration: 500,
+      },
+    }
+
+    let mousePos = {
+      vX: 0, vY: 0, tX: 0, tY: 0,
+    }
+    canvas.addEventListener('mousemove', (e) => {
+      const vX = e.clientX - canvas.offsetLeft
+      const vY = e.clientY - canvas.offsetTop
+
+      mousePos = {
+        tX: vToT(vX),
+        tY: vToT(vY),
+        vX,
+        vY,
+      }
+    })
+
+    const renderUnit = (unit) => {
+      const { sprite, x, y } = unit
+      ctx.drawImage(sprite, x, y, tileSize, tileSize)
+      // ctx.beginPath()
+      // ctx.fillStyle = 'black'
+      // ctx.rect(x - 5, y - 5, 10, 10)
+      // ctx.fill()
+      // ctx.beginPath()
+      // ctx.font = '20px monospace'
+      // ctx.fillStyle = 'white'
+      // ctx.fillText(sprites[spriteIndex], x, y)
+    }
+
+    const render = (state) => {
+      canvas.width = tileSize * worldWidth
+      canvas.height = tileSize * worldHeight
+      ctx.clearRect(0, 0, canvas.width, canvas.height)
+      for (let tX = 0; tX < worldWidth; tX++) {
+        for (let tY = 0; tY < worldHeight; tY++) {
+          ctx.beginPath()
+          ctx.rect(tX * tileSize, tY * tileSize, tileSize, tileSize)
+          ctx.fillStyle = tY % 2 === 1 ? (tX % 2 === 1 ? '#00e208' : '#03ce13') : (tX % 2 === 0 ? '#00e208' : '#03ce13')
+          ctx.fill()
+        }
+      }
+      if (state.selected !== undefined) {
+        ctx.beginPath()
+        ctx.rect(state.selected.x, state.selected.y, tileSize, tileSize)
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.3)'
+        ctx.fill()
+      }
+      for (let unit of state.units) {
+        renderUnit(unit)
+      }
+      if (state.placing !== undefined) {
+        ctx.beginPath()
+        ctx.rect(mousePos.vX, mousePos.vY, tileSize/4, tileSize/4)
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.7)'
+        ctx.fill()
+        ctx.beginPath()
+        ctx.rect(mousePos.tX * tileSize, mousePos.tY * tileSize, tileSize, tileSize)
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.4)'
+        ctx.fill()
+      }
+    }
+
+    const getInitialUnits = () => {
+      return [
+        {
+          state: 'moving',
+          timeStateEntered: Date.now(),
+          path: [[1, 1], [2, 2], [2, 3]],
+        },
+        {
+          state: 'stationary',
+          timeStateEntered: Date.now(),
+          path: [[6, 6]],
+        }
+      ]
+    }
+
+    let state = {
+      time: Date.now(),
+      units: getInitialUnits(),
+      actions: [],
+      // placing: {
+      //   type: 'bowl',
+      // }
+    }
+    window.state = state
+
+    const pathFrom = (from, to) => {
+      // console.log('pathfrom', from, to)
+      let path = []
+      let tX = from[0]
+      let tY = from[1]
+      path.push([from[0], from[1]])
+      // Move diagonally when possible
+      while (tX !== to[0] && tY !== to[1]) {
+        tX += to[0] > from[0] ? 1 : -1
+        tY += to[1] > from[1] ? 1 : -1
+        path.push([tX, tY])
+      }
+      while (tX !== to[0]) {
+        tX += to[0] > from[0] ? 1 : -1
+        path.push([tX, tY])
+      }
+      while (tY !== to[1]) {
+        tY += to[1] > from[1] ? 1 : -1
+        path.push([tX, tY])
+      }
+      // console.log(path)
+      return path
+    }
+
+    const destructivelyUpdateState = (state) => {
+      let now = Date.now()
+      let timeDelta = now - state.time
+
+      // Convert clicks into game state and actions
+      if (state.clicked !== undefined) {
+        const nearbyUnits = state.units.filter(unit => Math.abs(unit.x + tileSize / 2 - state.clicked.vX) < tileSize / 2 && Math.abs(unit.y + tileSize / 2 - state.clicked.vY) < tileSize / 2)
+        let unitClicked
+        if (nearbyUnits.length > 0) {
+          unitClicked = nearbyUnits[0]
+        }
+        if (state.selected === undefined) {
+          state.selected = unitClicked
+        } else { // something is already selected
+          if (state.selected === unitClicked) {
+            state.selected = undefined
+          } else { // You clicked on a different tile while having something selected
+            // If you clicked on another unit
+            if (unitClicked !== undefined) {
+              state.selected = unitClicked
+            } else {
+              state.actions.push({
+                type: 'moveUnit',
+                unit: state.selected,
+                moveTo: [state.clicked.tX, state.clicked.tY],
+              })
+            }
+          }
+        }
+      }
+      state.clicked = undefined
+
+      if (state.actions.length > 0) {
+        console.log(state.actions)
+        for (let action of state.actions) {
+          if (action.type === 'moveUnit') {
+            let unit = action.unit
+            let fromTile
+            // If the unit was moving, cancel it's planned movements after it completes the tile in progress
+            if (unit.state === 'moving') {
+              unit.path = unit.path.slice(0, 1).concat(pathFrom(unit.path[1], action.moveTo))
+            } else if (unit.state === 'stationary') {
+              unit.path = pathFrom(unit.path[0], action.moveTo)
+              unit.timeStateEntered = now
+            }
+            unit.state = 'moving'
+          }
+        }
+      }
+      state.actions = []
+
+      // Update troops screen positions and sprites
+      for (let unit of state.units) {
+        if (unit.timeStateEntered === undefined) {
+          throw 'no timeStateEntered!'
+        }
+        if (unit.state === 'moving') {
+          if (now - unit.timeStateEntered < singleTileMoveDuration) {
+            const movementPerc = (now - unit.timeStateEntered) / singleTileMoveDuration
+            unit.x = Math.round((1-movementPerc) * unit.path[0][0] * tileSize + movementPerc * unit.path[1][0] * tileSize)
+            unit.y = Math.round((1-movementPerc) * unit.path[0][1] * tileSize + movementPerc * unit.path[1][1] * tileSize)
+            unit.direction = unit.path[1][0] >= unit.path[0][0] ? 'right' : 'left'
+          } else { // if we finished moving one tile
+            unit.x = unit.path[1][0] * tileSize
+            unit.y = unit.path[1][1] * tileSize
+            unit.path = unit.path.slice(1)
+            if (unit.path.length === 1) {
+              unit.state = 'stationary'
+            }
+            unit.timeStateEntered = now
+          }
+        }
+        // Set sprites
+        let tmpSpritesAndMeta
+        if (unit.state === 'moving') {
+          tmpSpritesAndMeta = unit.direction === 'right' ? spritesAndMeta.rightSpritesAndMeta : spritesAndMeta.leftSpritesAndMeta
+        } else if (unit.state === 'stationary') {
+          tmpSpritesAndMeta = unit.direction === 'right' ? spritesAndMeta.rightSittingSpritesAndMeta : spritesAndMeta.leftSittingSpritesAndMeta
+          unit.x = unit.path[0][0] * tileSize
+          unit.y = unit.path[0][1] * tileSize
+        }
+        let {sprites, animationDuration} = tmpSpritesAndMeta
+        let spriteIndex = Math.floor(((now - unit.timeStateEntered + animationDuration) % animationDuration) / animationDuration * sprites.length)
+        unit.sprite = sprites[spriteIndex]
+      }
+
+      state.time = now
+    }
+
+    const updateStateAndRender = () => {
+      destructivelyUpdateState(state)
+      render(state)
+      requestAnimationFrame(updateStateAndRender)
+    }
+
+    const vToT = (v) => Math.floor(v / tileSize)
+
+    canvas.addEventListener('click', (e) => {
+      const vX = e.clientX - canvas.offsetLeft
+      const vY = e.clientY - canvas.offsetTop
+      state.clicked = {
+        tX: vToT(vX),
+        tY: vToT(vY),
+        vX,
+        vY,
+      }
+    }, true)
+
+    requestAnimationFrame(updateStateAndRender)
+    // setInterval(updateStateAndRender, tileSize)
+    updateStateAndRender()
+  </script>
+</body>
